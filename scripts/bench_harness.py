@@ -479,7 +479,15 @@ class BenchmarkOrchestrator:
             f.write(f"# Benchmark Summary - {self.mode.title()}\n\n")
             f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"**Config:** {self.config_path}\n")
-            f.write(f"**Model:** {self.config['model']['name']}\n\n")
+            
+            # Handle both model_path and model dict formats
+            if 'model_path' in self.config:
+                model_name = self.config.get('model_info', Path(self.config['model_path']).stem)
+                f.write(f"**Model:** {model_name}\n\n")
+            elif 'model' in self.config and isinstance(self.config['model'], dict):
+                f.write(f"**Model:** {self.config['model'].get('name', 'N/A')}\n\n")
+            else:
+                f.write(f"**Model:** N/A\n\n")
             
             # Group results by metric
             by_metric = {}
@@ -504,22 +512,20 @@ class BenchmarkOrchestrator:
                     # Calculate stats
                     perfs = [run['performance'].get('tokens_per_sec', 0) for run in runs]
                     avg_perf = sum(perfs) / len(perfs) if perfs else 0
+                    stddev_perf = (sum((p - avg_perf) ** 2 for p in perfs) / len(perfs)) ** 0.5 if len(perfs) > 1 else 0
                     
                     row = [
                         test['build']['name'],
                         test['pinning'][0],
-                        f"{test['scenario']['batch']['b']}/{test['scenario']['batch']['ub']}" if test['scenario']['batch'] else "N/A",
-                        f"{test['scenario']['kv']['type_k']}" if test['scenario']['kv'] else "N/A",
-                        test['scenario']['attention']['label'] if test['scenario']['attention'] else "N/A",
-                        f"{avg_perf:.2f}",
+                        f"{avg_perf:.2f} ± {stddev_perf:.2f}",
                         len(runs)
                     ]
                     rows.append(row)
                 
-                # Sort by performance
-                rows.sort(key=lambda x: float(x[5]), reverse=True)
+                # Sort by performance (extract first number from "X.XX ± Y.YY")
+                rows.sort(key=lambda x: float(x[2].split()[0]), reverse=True)
                 
-                headers = ['Build', 'Pinning', 'Batch', 'KV', 'Attention', 't/s', 'Reps']
+                headers = ['Build', 'Config', 't/s (avg ± stddev)', 'Reps']
                 f.write(tabulate(rows, headers=headers, tablefmt='pipe'))
                 f.write("\n\n")
             
