@@ -288,7 +288,14 @@ class BenchmarkOrchestrator:
         timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
         report_name = f"{timestamp}-{self.mode}"
         
-        report_base = Path(self.config['output']['report_dir'])
+        # Handle both 'output_dir' (top-level) and 'output.report_dir' (nested) formats
+        if 'output_dir' in self.config:
+            report_base = Path(self.config['output_dir'])
+        elif 'output' in self.config:
+            report_base = Path(self.config['output']['report_dir'])
+        else:
+            report_base = Path('./reports')  # Default fallback
+            
         self.report_dir = report_base / report_name
         self.report_dir.mkdir(parents=True, exist_ok=True)
         
