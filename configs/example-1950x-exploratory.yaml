@@ -1,0 +1,78 @@
+# ============================================================================
+# EXAMPLE: AMD Threadripper 1950X - Exploratory Mode
+# ============================================================================
+# This is a REAL working configuration for the Threadripper 1950X
+# 16 physical cores (0-15), 2 NUMA nodes, SMT enabled
+#
+# NUMA node 0: cores 0-7
+# NUMA node 1: cores 8-15
+# SMT siblings: cores 16-31 (avoid for CPU-intensive workloads)
+# ============================================================================
+
+mode: exploratory
+repetitions: 3
+
+model_path: /path/to/your/model.gguf
+model_info: "llama-3.1-8B-Q4_K_M"
+
+# Builds to test - edit paths to match your setup
+builds:
+  master:
+    binary: /path/to/llama.cpp-master/build/bin/llama-bench
+    label: "master (baseline)"
+    
+  pr1234:
+    binary: /path/to/llama.cpp-pr1234/build/bin/llama-bench
+    label: "PR#1234 (optimized)"
+
+# Which builds to include in this run
+builds_select:
+  - master
+  - pr1234
+
+# Test matrix - exploratory sweep across different NUMA strategies
+# Threadripper 1950X: 16 physical cores (0-15), 32 logical (16-31 are SMT siblings)
+test_matrix:
+  # Test 1: All 16 physical cores, 16 threads
+  - name: "all_cores_16t"
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+    
+  # Test 2: NUMA node 0 only (8 cores), 16 threads
+  - name: "node0_16t"
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+    
+  # Test 3: NUMA node 1 only (8 cores), 16 threads
+  - name: "node1_16t"
+    numactl: "--physcpubind=8,9,10,11,12,13,14,15"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+    
+  # Test 4: Half cores from each node (4+4=8 total), 16 threads
+  - name: "balanced_8c_16t"
+    numactl: "--physcpubind=0,1,2,3,8,9,10,11"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+    
+  # Test 5: Single CCX (first 4 cores), 16 threads
+  - name: "single_ccx_16t"
+    numactl: "--physcpubind=0,1,2,3"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+
+# Standard llama-bench metrics
+metrics:
+  - pp512    # Prompt processing: 512 tokens
+  - tg128    # Text generation: 128 tokens
+  - mixed    # Prompt=512 + Generate=128
+
+# Output directory
+output_dir: ./reports

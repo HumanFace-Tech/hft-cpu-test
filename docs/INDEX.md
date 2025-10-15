@@ -4,6 +4,17 @@ Complete documentation for the HFT CPU Benchmarking Kit.
 
 **Target Platforms:** Multi-core NUMA systems (AMD Threadripper, EPYC, Intel Xeon)
 
+## Configuration Files
+
+**Generic templates** (adapt to your CPU topology):
+- `configs/minimal.yaml` - Quick start
+- `configs/example-exploratory.yaml` - Full exploratory template
+- `configs/example-deep.yaml` - Deep validation template
+
+**Real working examples** (AMD Threadripper 1950X):
+- `configs/example-1950x-exploratory.yaml` - Complete exploratory setup
+- `configs/example-1950x-deep.yaml` - Deep validation setup
+
 ## Getting Started
 
 1. **[Quick Start Guide](QUICK_START.md)** ⭐ START HERE

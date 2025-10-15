@@ -2,6 +2,12 @@
 
 Real-world benchmarking scenarios for multi-core NUMA systems.
 
+**Note:** For complete working examples specific to AMD Threadripper 1950X, see:
+- `configs/example-1950x-exploratory.yaml` - Full exploratory configuration
+- `configs/example-1950x-deep.yaml` - Deep validation configuration
+
+These examples below use generic placeholders. Adapt them to your CPU topology.
+
 ## 1. First Time Setup
 
 ```bash

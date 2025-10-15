@@ -11,8 +11,8 @@ A lightweight, config-driven harness for systematic llama.cpp performance testin
 
 ## Target Platform
 
-Optimized for multi-core NUMA systems, particularly:
-- AMD Threadripper (1950X, 2990WX, 3970X, etc.)
+Optimized for multi-core NUMA systems, including:
+- AMD Threadripper (all models)
 - AMD EPYC (dual-socket servers)
 - Intel Xeon (multi-socket NUMA configurations)
 
@@ -30,8 +30,12 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # 2. Configure your test
+# Option A: Start from 1950X example (if you have one)
+cp configs/example-1950x-exploratory.yaml configs/mytest.yaml
+
+# Option B: Start from generic template
 cp configs/example-exploratory.yaml configs/mytest.yaml
-# Edit: model path, llama-bench path
+# Then: Edit model path, llama-bench path, CPU topology
 
 # 3. Run exploratory sweep
 ./run_bench.sh configs/mytest.yaml
@@ -47,10 +51,12 @@ cat reports/latest/summary.md
 
 ```
 hft-cpu-test/
-├── configs/                      # Test definitions (YAML)
-│   ├── example-exploratory.yaml  # Full exploratory template
-│   ├── example-deep.yaml         # Deep testing template
-│   └── minimal.yaml              # Quick-start minimal config
+├── configs/                           # Test definitions (YAML)
+│   ├── minimal.yaml                   # Quick-start template
+│   ├── example-exploratory.yaml       # Generic exploratory template
+│   ├── example-deep.yaml              # Generic deep template
+│   ├── example-1950x-exploratory.yaml # Real 1950X exploratory config
+│   └── example-1950x-deep.yaml        # Real 1950X deep config
 ├── scripts/
 │   ├── bench_harness.py          # Main orchestrator
 │   ├── setup_builds.sh           # Optional: build multiple BLAS variants
@@ -90,6 +96,17 @@ Example presets (adjust for your CPU topology):
 - **balanced:** Cores spread evenly across nodes
 
 **Important:** Use `lscpu --parse=CPU,Core,Node` to identify your physical core IDs. On many AMD systems they're sequential (0-15), on some Intel systems they're even-numbered (0,2,4...).
+
+## Example Configurations
+
+**Generic templates** (adapt to your CPU):
+- `configs/minimal.yaml` - Quick start template
+- `configs/example-exploratory.yaml` - Full exploratory template
+- `configs/example-deep.yaml` - Deep validation template
+
+**Real working examples** (AMD Threadripper 1950X):
+- `configs/example-1950x-exploratory.yaml` - Complete exploratory config
+- `configs/example-1950x-deep.yaml` - Deep validation config
 
 ## Documentation
 

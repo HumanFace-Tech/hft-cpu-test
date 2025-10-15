@@ -1,0 +1,61 @@
+# ============================================================================
+# EXAMPLE: AMD Threadripper 1950X - Deep Validation Mode
+# ============================================================================
+# This is a REAL working configuration for the Threadripper 1950X
+# Use this AFTER exploratory run identifies the winning configuration
+#
+# 16 physical cores (0-15), 2 NUMA nodes, SMT enabled
+# NUMA node 0: cores 0-7
+# NUMA node 1: cores 8-15
+# ============================================================================
+
+mode: deep
+repetitions: 10
+
+model_path: /path/to/your/model.gguf
+model_info: "llama-3.1-8B-Q4_K_M"
+
+# Builds to validate - narrow down to finalists
+builds:
+  master:
+    binary: /path/to/llama.cpp-master/build/bin/llama-bench
+    label: "master (baseline)"
+    
+  pr1234:
+    binary: /path/to/llama.cpp-pr1234/build/bin/llama-bench
+    label: "PR#1234 (winner from exploratory)"
+
+builds_select:
+  - master
+  - pr1234
+
+# Deep validation - focus on winning configuration from exploratory
+# Example: If "all_cores_16t" won in exploratory, validate it here with 10 reps
+# Threadripper 1950X: 16 physical cores (0-15), always use 16 threads
+test_matrix:
+  # Winner from exploratory run - example: all cores
+  - name: "all_cores_16t_validated"
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+    
+  # Runner-up for comparison (if needed) - example: node0
+  - name: "node0_16t_validated"
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+
+# Same metrics as exploratory
+metrics:
+  - pp512
+  - tg128
+  - mixed
+
+output_dir: ./reports
+
+# Optional: Stricter environment validation
+provenance:
+  verify_system_state: true
+  fail_on_numa_imbalance: true

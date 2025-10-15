@@ -193,8 +193,8 @@ echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governo
 echo 0 | sudo tee /proc/sys/kernel/numa_balancing
 
 # 3. Create config
-cp configs/quietbee-minimal.yaml configs/prod-test.yaml
-nano configs/prod-test.yaml  # Edit model/build paths
+cp configs/minimal.yaml configs/prod-test.yaml
+nano configs/prod-test.yaml  # Edit model/build paths and CPU bindings
 
 # 4. Verify setup
 ./scripts/check_system.sh
