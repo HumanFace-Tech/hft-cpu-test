@@ -249,8 +249,22 @@ class BenchmarkRunner:
     
     @staticmethod
     def parse_bench_output(output: str) -> Optional[Dict[str, float]]:
-        """Extract performance metrics from llama-bench JSON output."""
+        """Extract performance metrics from llama-bench JSON output.
+        
+        Handles IK llama.cpp fork's banner pollution by stripping everything
+        before the first '[' character (the JSON array start).
+        """
         try:
+            # Clean output: strip everything before first '[' 
+            # This handles banners like "HAVE_FANCY_SIMD is NOT defined" from IK fork
+            json_start = output.find('[')
+            if json_start != -1:
+                output = output[json_start:]
+            elif output.find('{') != -1:
+                # Fallback: try to find standalone JSON object
+                json_start = output.find('{')
+                output = output[json_start:]
+            
             # llama-bench with -o json outputs JSON array
             data = json.loads(output)
             
