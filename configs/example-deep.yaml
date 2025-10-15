@@ -1,39 +1,134 @@
 # ============================================================================
-# Generic Deep Validation Configuration Template
+# EXAMPLE: Deep Mode - Parameter Sweep
 # ============================================================================
-# Use this AFTER running exploratory mode to validate your winners
-# Copy the winning configuration from your exploratory results
+# Use this AFTER exploratory identifies 2-3 winning builds
+# Deep mode tests parameter variations on the winners
+#
+# This generates a HUGE matrix by combining:
+# - builds × NUMA configs × KV cache × MLA × batch sizes × metrics
 # ============================================================================
 
 mode: deep
-repetitions: 10
+repetitions: 3  # Still reasonable reps, but breadth not depth
 
 model_path: /path/to/your/model.gguf
-model_info: "model-name-Q4_K_M"
+model_info: "gpt-oss-20b-Q4_K_M"
 
-# Deep mode: only test the winning build
+# Builds from exploratory winners
 builds:
-  winning_build:
-    binary: /path/to/winning/llama-bench
-    label: "Winner from exploratory"
+  ik_vanilla:
+    binary: /home/nikro/projects/ik_llama.cpp/build-cpu/bin/llama-bench
+    label: "IK-vanilla (winner)"
+    
+  ik_fancy:
+    binary: /home/nikro/projects/ik_llama.cpp/build-fancy/bin/llama-bench
+    label: "IK-fancy (runner-up)"
 
 builds_select:
-  - winning_build
+  - ik_vanilla
+  - ik_fancy
 
-# Test matrix - use ONLY the winning config from exploratory
+# Base NUMA/threading configs to test
 test_matrix:
-  # Example: If "all_cores" won in exploratory, validate it here
-  - name: "winner_config"
-    numactl: "--physcpubind=<winning_cores>"  # Copy from exploratory winner
+  - name: "numa_optimal"
+    numactl: "-N 0,1 -m 0,1 --physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
     env:
-      OMP_NUM_THREADS: "<thread_count>"
-    extra_args: "-t <thread_count>"
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+  
+  - name: "numa_node0_only"
+    numactl: "-N 0 -m 0 --physcpubind=0,1,2,3,4,5,6,7"
+    env:
+      OMP_NUM_THREADS: "8"
+    extra_args: "-t 8"
+  
+  - name: "no_affinity"
+    numactl: ""
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
 
-# Same metrics as exploratory
+# Metrics to test
 metrics:
   - pp512
   - tg128
   - mixed
 
-# Output directory
+# ============================================================================
+# PARAMETER SWEEP CONFIGURATION (deep mode only)
+# ============================================================================
+
+parameter_sweep:
+  
+  # KV Cache Type Variations
+  # Test different quantization for K and V caches
+  kv_cache:
+    - name: "f16_f16"
+      args: "-ctk f16 -ctv f16"  # Default (baseline)
+    
+    - name: "f16_f8"
+      args: "-ctk f16 -ctv f8"   # Quantize V cache
+    
+    - name: "f8_f16"
+      args: "-ctk f8 -ctv f16"   # Quantize K cache
+    
+    - name: "f8_f8"
+      args: "-ctk f8 -ctv f8"    # Quantize both (max memory savings)
+  
+  # MLA (Multi-Layer Attention) Variants
+  # Test different attention optimizations
+  mla_variants:
+    - name: "baseline"
+      args: ""  # No MLA flags
+    
+    - name: "mla2_fa_fmoe"
+      args: "-mla 2 -fa -fmoe"  # MLA level 2 + flash attn + fused MoE
+    
+    - name: "mla3_fa_fmoe"
+      args: "-mla 3 -fa -fmoe"  # MLA level 3 + flash attn + fused MoE
+    
+    - name: "mla2_fa"
+      args: "-mla 2 -fa"  # MLA level 2 + flash attn (no fused MoE)
+    
+    - name: "mla3_fa"
+      args: "-mla 3 -fa"  # MLA level 3 + flash attn (no fused MoE)
+  
+  # Batch/Ubatch Size Variations
+  # Test different batching configurations
+  batch_sizes:
+    - name: "std_2048_512"
+      args: "-b 2048 -ub 512"  # Default (baseline)
+    
+    - name: "small_256_32"
+      args: "-b 256 -ub 32"    # Small batches (low latency)
+    
+    - name: "small_256_64"
+      args: "-b 256 -ub 64"
+    
+    - name: "small_256_96"
+      args: "-b 256 -ub 96"
+    
+    - name: "small_256_128"
+      args: "-b 256 -ub 128"
+    
+    - name: "mid_512_128"
+      args: "-b 512 -ub 128"   # Medium batches
+    
+    - name: "mid_1024_256"
+      args: "-b 1024 -ub 256"
+
 output_dir: ./reports
+
+# ============================================================================
+# MATRIX SIZE CALCULATION
+# ============================================================================
+# Total tests = builds × test_matrix × metrics × kv_cache × mla × batch_sizes
+#
+# With this config:
+# 2 builds × 3 NUMA × 3 metrics × 4 KV × 5 MLA × 7 batch = 2,520 tests
+# At 3 reps each = 7,560 runs
+# 
+# Estimated time: ~10-15 hours (depends on model size)
+#
+# TIP: Start smaller! Comment out most variants, test a few, then expand
+# ============================================================================

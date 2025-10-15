@@ -76,15 +76,19 @@ hft-cpu-test/
 ## Two-Mode Workflow
 
 ### Exploratory (Fast Discovery)
-- Test 3-4 builds × 3 NUMA presets × key scenarios
+- Test many builds (4-6) with simple configurations
+- Default parameters, basic NUMA strategies
 - 2-3 repetitions per configuration
-- Generates ranking + `promote.yaml` with top performers
+- Goal: Identify 2-3 winning builds
+- Generates ranking in `summary.md`
 
-### Deep (Validation)
-- Test top 1-2 configurations from exploratory
-- 7-10 repetitions with outlier rejection
-- Statistical confidence intervals
-- Production-ready recommendations
+### Deep (Parameter Sweep)
+- Test top 2-3 builds from exploratory with parameter variations
+- KV cache types (f16/f16, f8/f16, f16/f8, f8/f8)
+- MLA variants (mla 2/3, flash attention, fused MoE)
+- Batch/ubatch size combinations
+- 3 repetitions (breadth over depth)
+- Goal: Find optimal parameter settings for production
 
 ## NUMA Strategies
 

@@ -1,8 +1,11 @@
 # ============================================================================
-# EXAMPLE: AMD Threadripper 1950X - Deep Validation Mode
+# EXAMPLE: AMD Threadripper 1950X - Deep Parameter Sweep Mode
 # ============================================================================
 # This is a REAL working configuration for the Threadripper 1950X
-# Use this AFTER exploratory run identifies the winning configuration
+# Use this AFTER exploratory run identifies 2-3 winning builds
+#
+# Deep mode = parameter exploration (KV cache, MLA, batch sizes)
+# NOT just "run winners with more reps"
 #
 # 16 physical cores (0-15), 2 NUMA nodes, SMT enabled
 # NUMA node 0: cores 0-7
@@ -10,39 +13,29 @@
 # ============================================================================
 
 mode: deep
-repetitions: 10
+repetitions: 3  # Breadth over depth
 
 model_path: /path/to/your/model.gguf
 model_info: "llama-3.1-8B-Q4_K_M"
 
-# Builds to validate - narrow down to finalists
+# Builds from exploratory winners (top 2-3)
 builds:
-  master:
-    binary: /path/to/llama.cpp-master/build/bin/llama-bench
-    label: "master (baseline)"
+  ik_vanilla:
+    binary: /home/nikro/projects/ik_llama.cpp/build-cpu/bin/llama-bench
+    label: "IK-vanilla (winner)"
     
-  pr1234:
-    binary: /path/to/llama.cpp-pr1234/build/bin/llama-bench
-    label: "PR#1234 (winner from exploratory)"
+  ik_fancy:
+    binary: /home/nikro/projects/ik_llama.cpp/build-fancy/bin/llama-bench
+    label: "IK-fancy"
 
 builds_select:
-  - master
-  - pr1234
+  - ik_vanilla
+  - ik_fancy
 
-# Deep validation - focus on winning configuration from exploratory
-# Example: If "all_cores_16t" won in exploratory, validate it here with 10 reps
-# Threadripper 1950X: 16 physical cores (0-15), always use 16 threads
+# Test the winning NUMA config from exploratory
 test_matrix:
-  # Winner from exploratory run - example: all cores
-  - name: "all_cores_16t_validated"
-    numactl: "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
-    env:
-      OMP_NUM_THREADS: "16"
-    extra_args: "-t 16"
-    
-  # Runner-up for comparison (if needed) - example: node0
-  - name: "node0_16t_validated"
-    numactl: "--physcpubind=0,1,2,3,4,5,6,7"
+  - name: "optimal"
+    numactl: "-N 0,1 -m 0,1 --physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
     env:
       OMP_NUM_THREADS: "16"
     extra_args: "-t 16"
@@ -55,7 +48,52 @@ metrics:
 
 output_dir: ./reports
 
-# Optional: Stricter environment validation
-provenance:
-  verify_system_state: true
-  fail_on_numa_imbalance: true
+# ============================================================================
+# PARAMETER SWEEP (this is what makes "deep" mode deep!)
+# ============================================================================
+
+parameter_sweep:
+  
+  # KV Cache Type Variations
+  kv_cache:
+    - name: "f16_f16"
+      args: "-ctk f16 -ctv f16"  # Baseline
+    
+    - name: "f8_f16"
+      args: "-ctk f8 -ctv f16"   # Quantize K cache (common optimization)
+    
+    - name: "f16_f8"
+      args: "-ctk f16 -ctv f8"   # Quantize V cache
+  
+  # MLA/Attention Variants
+  mla_variants:
+    - name: "baseline"
+      args: ""
+    
+    - name: "mla2_fa_fmoe"
+      args: "-mla 2 -fa -fmoe"
+    
+    - name: "mla3_fa_fmoe"
+      args: "-mla 3 -fa -fmoe"
+    
+    - name: "mla2_fa"
+      args: "-mla 2 -fa"  # Without fused MoE
+  
+  # Batch Size Variations
+  batch_sizes:
+    - name: "std"
+      args: "-b 2048 -ub 512"
+    
+    - name: "small_128"
+      args: "-b 256 -ub 128"
+    
+    - name: "small_64"
+      args: "-b 256 -ub 64"
+    
+    - name: "mid"
+      args: "-b 512 -ub 256"
+
+# ============================================================================
+# MATRIX SIZE: 2 builds × 1 NUMA × 3 metrics × 3 KV × 4 MLA × 4 batch
+#              = 288 tests × 3 reps = 864 runs (~6-8 hours)
+# ============================================================================

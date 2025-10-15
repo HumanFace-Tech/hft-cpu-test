@@ -381,7 +381,18 @@ class BenchmarkOrchestrator:
         return [b for b in all_builds if b['name'] in selected]
     
     def generate_test_matrix(self) -> List[Dict[str, Any]]:
-        """Create the full test matrix from test_matrix config section."""
+        """Create the full test matrix from test_matrix config section.
+        
+        For 'exploratory' mode: simple matrix of builds × configs × metrics
+        For 'deep' mode: parameter sweep with KV cache, MLA, batch variations
+        """
+        if self.mode == 'deep':
+            return self._generate_deep_matrix()
+        else:
+            return self._generate_exploratory_matrix()
+    
+    def _generate_exploratory_matrix(self) -> List[Dict[str, Any]]:
+        """Generate exploratory test matrix (simple combinations)."""
         matrix = []
         builds = self.get_selected_builds()
         
@@ -423,6 +434,73 @@ class BenchmarkOrchestrator:
                         'extra_args': test_config.get('extra_args', '')
                     }
                     matrix.append(test_case)
+        
+        return matrix
+    
+    def _generate_deep_matrix(self) -> List[Dict[str, Any]]:
+        """Generate deep test matrix with parameter sweeps.
+        
+        Deep mode explores parameter variations:
+        - KV cache types (f16/f16, f16/f8, f8/f16, f8/f8)
+        - MLA variants (-mla 2/3, -fa, -fmoe combinations)
+        - Batch/ubatch sizes
+        - NUMA configs (from test_matrix)
+        """
+        matrix = []
+        builds = self.get_selected_builds()
+        test_configs = self.config['test_matrix']
+        metrics = self.config.get('metrics', ['pp512', 'tg128', 'mixed'])
+        
+        # Parse metrics
+        parsed_metrics = []
+        for m in metrics:
+            if isinstance(m, str):
+                if m == 'pp512':
+                    parsed_metrics.append({'name': 'pp512', 'args': '-p 512 -n 0'})
+                elif m == 'tg128':
+                    parsed_metrics.append({'name': 'tg128', 'args': '-p 0 -n 128'})
+                elif m == 'mixed':
+                    parsed_metrics.append({'name': 'mixed', 'args': '-pg 512,128'})
+            else:
+                parsed_metrics.append(m)
+        
+        # Get parameter sweep config
+        param_sweep = self.config.get('parameter_sweep', {})
+        
+        # KV cache variations (default: just f16/f16)
+        kv_variants = param_sweep.get('kv_cache', [{'name': 'f16_f16', 'args': '-ctk f16 -ctv f16'}])
+        
+        # MLA/attention variants (default: none)
+        mla_variants = param_sweep.get('mla_variants', [{'name': 'baseline', 'args': ''}])
+        
+        # Batch size variants (default: standard)
+        batch_variants = param_sweep.get('batch_sizes', [{'name': 'standard', 'args': '-b 2048 -ub 512'}])
+        
+        # Generate cross-product
+        for build in builds:
+            for test_config in test_configs:
+                pinning = {
+                    'numactl': test_config.get('numactl'),
+                    'llama_numa': test_config.get('llama_numa')
+                }
+                config_name = test_config['name']
+                
+                for metric in parsed_metrics:
+                    for kv in kv_variants:
+                        for mla in mla_variants:
+                            for batch in batch_variants:
+                                # Build combined name and args
+                                variant_name = f"{config_name}_{kv['name']}_{mla['name']}_{batch['name']}"
+                                combined_args = f"{test_config.get('extra_args', '')} {kv['args']} {mla['args']} {batch['args']}".strip()
+                                
+                                test_case = {
+                                    'build': build,
+                                    'pinning': (variant_name, pinning),
+                                    'metric': metric,
+                                    'env': test_config.get('env', {}),
+                                    'extra_args': combined_args
+                                }
+                                matrix.append(test_case)
         
         return matrix
     

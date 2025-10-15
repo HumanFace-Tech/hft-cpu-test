@@ -91,18 +91,50 @@ Common metrics:
 
 
 ### `repetitions` (required)
-- Type: `int` or `object`
-- If `int`: Number of repetitions per test
-- If `object`: Use `count` (int), `outlier_rejection` (bool), `confidence_interval` (float, optional)
+- Type: `int`
+- Purpose: Number of repetitions per test
 
 **Recommended:**
-- Exploratory: `2`
-- Deep: `10`
+- Exploratory: `2-3` (fast discovery)
+- Deep: `3` (breadth over depth)
 
 
 ### `output_dir` (required)
 - Type: `string`
 - Purpose: Base directory for reports
+
+
+### `parameter_sweep` (deep mode only)
+- Type: `object`
+- Purpose: Define parameter variations for deep mode testing
+- Fields:
+  - `kv_cache`: List of KV cache type variations
+  - `mla_variants`: List of MLA/attention optimization variants
+  - `batch_sizes`: List of batch/ubatch size combinations
+
+#### Parameter Sweep Example
+```yaml
+parameter_sweep:
+  kv_cache:
+    - name: f16_f16
+      args: "-ctk f16 -ctv f16"  # Baseline
+    - name: f8_f16
+      args: "-ctk f8 -ctv f16"   # Quantized K cache
+  
+  mla_variants:
+    - name: baseline
+      args: ""                   # No optimization
+    - name: mla2_fa_fmoe
+      args: "-mla 2 -fa -fmoe"  # MLA + flash attn + fused MoE
+  
+  batch_sizes:
+    - name: std
+      args: "-b 2048 -ub 512"   # Default
+    - name: small
+      args: "-b 256 -ub 128"    # Lower latency
+```
+
+**Deep mode generates cross-product:** builds × test_matrix × metrics × kv_cache × mla_variants × batch_sizes
 
 
 ## Complete Examples
@@ -111,10 +143,11 @@ See `configs/example-exploratory.yaml` and `configs/example-deep.yaml` for full 
 
 ## Workflow
 
-1. **Exploratory:** Broad sweep with `generate_promote: true`
-2. Review `reports/latest/promote.yaml` for top performers
-3. **Deep:** Run promoted config with 10 repetitions and outlier rejection
-4. Select production settings from deep mode results
+1. **Exploratory:** Test many builds with simple configs (2-3 reps)
+2. Review `reports/latest/summary.md` for top 2-3 builds
+3. **Deep:** Create parameter sweep config testing winners with variations
+4. Run deep config to find optimal KV cache, MLA, batch settings
+5. Select production settings from deep mode results
 
 ## CPU Topology Detection
 

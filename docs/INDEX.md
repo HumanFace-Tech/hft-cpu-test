@@ -36,7 +36,13 @@ Complete documentation for the HFT CPU Benchmarking Kit.
    - All configuration options
    - CPU topology detection guide
 
-4. **[Provenance Capture](PROVENANCE.md)**
+4. **[Deep Mode Explained](DEEP_MODE.md)** ⭐ IMPORTANT
+   - Parameter sweep methodology
+   - KV cache, MLA, batch size variations
+   - Matrix size calculations
+   - Deep vs exploratory modes
+
+5. **[Provenance Capture](PROVENANCE.md)**
    - What's captured per run
    - Debugging performance issues
    - System validation checklist

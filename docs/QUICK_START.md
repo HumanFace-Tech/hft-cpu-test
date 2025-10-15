@@ -117,19 +117,23 @@ Look for:
 - Consistency across repetitions
 - Any obvious outliers or anomalies
 
-## Step 7: Run Deep Testing
+## Step 7: Run Deep Testing (Parameter Sweep)
 
-Use the auto-generated promote file with winners:
+After exploratory identifies winners, create a deep config to test parameter variations:
 
 ```bash
-./run_bench.sh reports/latest/promote.yaml
+# Copy starter template
+cp configs/example-deep.yaml configs/mytest-deep.yaml
+
+# Edit to use your winning builds and add parameter sweep
+nano configs/mytest-deep.yaml
 ```
 
 Deep testing provides:
-- 10 repetitions (vs 2 in exploratory)
-- Outlier rejection (drop min/max)
-- Statistical confidence intervals
-- Production-ready recommendations
+- Parameter sweeps: KV cache types, MLA variants, batch sizes
+- Tests combinations to find optimal settings
+- Same repetitions (3), but many more parameter variations
+- Production-ready recommendations with optimal parameters
 
 ## Step 8: Select Production Settings
 

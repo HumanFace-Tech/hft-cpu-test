@@ -140,75 +140,88 @@ scenarios:
 ## 6. Full Exploratory → Deep Workflow
 
 ```bash
-# Step 1: Run exploratory with 3 builds
+# Step 1: Run exploratory with multiple builds
 ./run_bench.sh configs/mybox-exploratory.yaml
-# Takes ~20 minutes
+# Takes ~20 minutes, tests many builds with simple configs
 
-# Step 2: Check results
+# Step 2: Check results and identify top 2-3 builds
 cat reports/latest/summary.md
-less reports/latest/raw/results.json
 
-# Step 3: Auto-generated promote file
-cat reports/latest/promote.yaml
+# Step 3: Create deep config for parameter sweep
+cp configs/example-deep.yaml configs/mybox-deep.yaml
+nano configs/mybox-deep.yaml
+# - Set builds_select to your top 2-3 winners
+# - Configure parameter_sweep (KV cache, MLA, batch sizes)
 
-# Step 4: Run deep test on winners
-./run_bench.sh reports/latest/promote.yaml
-# Takes ~40 minutes (10 reps × multiple configs)
+# Step 4: Run deep parameter sweep
+./run_bench.sh configs/mybox-deep.yaml
+# Takes ~3-8 hours depending on parameter combinations
 
-# Step 5: Final results
+# Step 5: Final results with optimal parameters
 cat reports/latest/summary.md
 ```
 
-## 7. Custom Deep Config (Manual Winner Selection)
+## 7. Deep Mode - Parameter Sweep
 
 After reviewing exploratory results, create `configs/production-deep.yaml`:
 
 ```yaml
 mode: deep
+repetitions: 3  # Breadth over depth
 
-model:
-  path: /data/models/qwen-14b-q4.gguf
-  name: qwen-14b-q4
+model_path: /data/models/qwen-14b-q4.gguf
+model_info: qwen-14b-q4
 
 builds:
-  - name: blis-omp
-    path: /opt/builds/blis-omp/llama-bench
-    provider: BLIS-OpenMP
+  blis-omp:
+    binary: /opt/builds/blis-omp/llama-bench
+    label: BLIS-OpenMP
     env:
       OMP_NUM_THREADS: "1"
       BLIS_NUM_THREADS: "1"
 
 builds_select: [blis-omp]  # Winner from exploratory
 
-pinning:
-  presets:
-    winner:
-      description: "Best performer from exploratory"
-      # REPLACE with your winning physical core configuration
-      numactl: "-N 0,1 -m 0,1 --physcpubind=<your_physical_cores>"
-      llama_numa: null
-  select: [winner]
-
-scenarios:
-  threads: 16  # Adjust to your core count
-  batches: [{b: 256, ub: 96}]  # Best from exploratory
-  kv_cache: [{type_k: q8_0, type_v: f16}]  # Best from exploratory
-  attention: [{flags: ["-mla", "3", "-fa"], label: "mla3-fa"}]  # Best from exploratory
+test_matrix:
+  - name: optimal
+    numactl: "-N 0,1 -m 0,1 --physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
 
 metrics:
-  - {name: pp512, args: "-p 512 -n 0"}
-  - {name: tg128, args: "-p 0 -n 128"}
-  - {name: mixed, args: "-p 256 -n 512"}
+  - pp512
+  - tg128
+  - mixed
 
-repetitions:
-  count: 10
-  outlier_rejection: true
-  confidence_interval: 0.95
+output_dir: ./reports
 
-output:
-  report_dir: reports
-  timestamp: true
-  generate_promote: false
+# Parameter sweep - test combinations
+parameter_sweep:
+  kv_cache:
+    - name: f16_f16
+      args: "-ctk f16 -ctv f16"  # Baseline
+    - name: f8_f16
+      args: "-ctk f8 -ctv f16"   # Quantized K
+  
+  mla_variants:
+    - name: baseline
+      args: ""
+    - name: mla2_fa
+      args: "-mla 2 -fa"
+    - name: mla3_fa_fmoe
+      args: "-mla 3 -fa -fmoe"
+  
+  batch_sizes:
+    - name: std
+      args: "-b 2048 -ub 512"
+    - name: small
+      args: "-b 256 -ub 128"
+    - name: mid
+      args: "-b 512 -ub 256"
+
+# This generates: 1 build × 1 NUMA × 3 metrics × 2 KV × 3 MLA × 3 batch
+#                = 54 tests × 3 reps = 162 runs
 ```
 
 ## 8. Understanding Your CPU Topology
