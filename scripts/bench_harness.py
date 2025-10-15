@@ -147,8 +147,12 @@ class BenchmarkRunner:
     ) -> Tuple[List[str], Dict[str, str]]:
         """Construct the benchmark command."""
         
-        # Base command with metric args
+        # Base command with metric args + JSON output format
         cmd_parts = [binary, '-m', model] + metric_args.split()
+        
+        # Force JSON output for reliable parsing
+        if '-o' not in metric_args and '--output' not in metric_args:
+            cmd_parts.extend(['-o', 'json'])
         
         # NUMA handling
         env = os.environ.copy()
@@ -240,33 +244,45 @@ class BenchmarkRunner:
     
     @staticmethod
     def parse_bench_output(output: str) -> Optional[Dict[str, float]]:
-        """Extract performance metrics from llama-bench output."""
-        # llama-bench typically outputs lines like:
-        # | model | ... | t/s | ... |
-        # We'll look for patterns in the output
-        
-        perf = {}
-        for line in output.splitlines():
-            # Look for token/sec patterns
-            if 't/s' in line.lower() or 'tokens' in line.lower():
-                # Try to extract numeric values
-                numbers = re.findall(r'(\d+\.\d+)', line)
-                if numbers:
-                    perf['tokens_per_sec'] = float(numbers[0])
+        """Extract performance metrics from llama-bench JSON output."""
+        try:
+            # llama-bench with -o json outputs JSON array
+            data = json.loads(output)
             
-            # Look for prompt processing
-            if 'pp' in line.lower() and 't/s' in line.lower():
-                numbers = re.findall(r'(\d+\.\d+)', line)
-                if numbers:
-                    perf['pp_tokens_per_sec'] = float(numbers[0])
+            # Could be a single result or array of results
+            if isinstance(data, list):
+                # Take first result if multiple
+                result = data[0] if data else {}
+            else:
+                result = data
             
-            # Look for text generation
-            if 'tg' in line.lower() and 't/s' in line.lower():
-                numbers = re.findall(r'(\d+\.\d+)', line)
-                if numbers:
-                    perf['tg_tokens_per_sec'] = float(numbers[0])
-        
-        return perf if perf else None
+            if not result:
+                return None
+            
+            perf = {}
+            
+            # Extract throughput (tokens per second)
+            if 'avg_ts' in result:
+                perf['tokens_per_sec'] = result['avg_ts']
+            
+            # Extract test type info
+            test_type = result.get('test', '')
+            if 'pp' in test_type:
+                perf['pp_tokens_per_sec'] = result.get('avg_ts', 0)
+            elif 'tg' in test_type:
+                perf['tg_tokens_per_sec'] = result.get('avg_ts', 0)
+            
+            # Store additional useful metrics
+            perf['avg_ns'] = result.get('avg_ns', 0)
+            perf['stddev_ts'] = result.get('stddev_ts', 0)
+            perf['n_prompt'] = result.get('n_prompt', 0)
+            perf['n_gen'] = result.get('n_gen', 0)
+            
+            return perf if perf else None
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            # If JSON parsing fails, return None (caller will handle)
+            return None
 
 
 class BenchmarkOrchestrator:
