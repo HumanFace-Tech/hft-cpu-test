@@ -572,74 +572,59 @@ class BenchmarkOrchestrator:
             results.sort(reverse=True, key=lambda x: x[0])
             winners.extend([r[1] for r in results[:top_n]])
         
-        # Build promote config (simplified deep config)
+        # Build promote config for deep testing
         promote_path = self.report_dir / 'promote.yaml'
         
+        # Start with base config structure
         promote_config = {
             'mode': 'deep',
-            'model': self.config['model'],
-            'builds': [],
-            'pinning': {'presets': {}, 'select': []},
-            'scenarios': {
-                'threads': self.config['scenarios']['threads'],
-                'batches': [],
-                'kv_cache': [],
-                'attention': []
-            },
-            'metrics': self.config['metrics'],
-            'repetitions': {
-                'count': 10,
-                'outlier_rejection': True,
-                'confidence_interval': 0.95
-            },
-            'output': {
-                'report_dir': 'reports',
-                'timestamp': True,
-                'generate_promote': False
-            }
+            'repetitions': 10,  # More reps for deep testing
+            'metrics': self.config.get('metrics', ['pp512', 'tg128', 'mixed']),
+            'output_dir': self.config.get('output_dir', './reports'),
+            'builds': {},
+            'builds_select': [],
+            'test_matrix': []
         }
+        
+        # Handle model - support both formats
+        if 'model_path' in self.config:
+            promote_config['model_path'] = self.config['model_path']
+            if 'model_info' in self.config:
+                promote_config['model_info'] = self.config['model_info']
+        elif 'model' in self.config:
+            promote_config['model'] = self.config['model']
+        
+        # Add llama_bench_reps if configured
+        if 'llama_bench_reps' in self.config:
+            promote_config['llama_bench_reps'] = self.config['llama_bench_reps']
         
         # Collect unique winners
         seen_builds = set()
-        seen_pinning = set()
-        seen_batches = set()
-        seen_kv = set()
-        seen_attn = set()
+        seen_configs = set()
         
         for winner in winners:
             test = winner['test']
             
+            # Add build if not seen
             build_name = test['build']['name']
             if build_name not in seen_builds:
-                promote_config['builds'].append(test['build'])
+                promote_config['builds'][build_name] = {
+                    'binary': test['build']['binary'],
+                    'label': test['build'].get('label', build_name)
+                }
+                promote_config['builds_select'].append(build_name)
                 seen_builds.add(build_name)
             
-            pin_name = test['pinning'][0]
-            if pin_name not in seen_pinning:
-                promote_config['pinning']['presets'][pin_name] = test['pinning'][1]
-                promote_config['pinning']['select'].append(pin_name)
-                seen_pinning.add(pin_name)
-            
-            if test['scenario']['batch']:
-                batch_key = f"{test['scenario']['batch']['b']}-{test['scenario']['batch']['ub']}"
-                if batch_key not in seen_batches:
-                    promote_config['scenarios']['batches'].append(test['scenario']['batch'])
-                    seen_batches.add(batch_key)
-            
-            if test['scenario']['kv']:
-                kv_key = f"{test['scenario']['kv']['type_k']}-{test['scenario']['kv']['type_v']}"
-                if kv_key not in seen_kv:
-                    promote_config['scenarios']['kv_cache'].append(test['scenario']['kv'])
-                    seen_kv.add(kv_key)
-            
-            if test['scenario']['attention']:
-                attn_label = test['scenario']['attention']['label']
-                if attn_label not in seen_attn:
-                    promote_config['scenarios']['attention'].append(test['scenario']['attention'])
-                    seen_attn.add(attn_label)
-        
-        # Add select field separately
-        promote_config['builds_select'] = list(seen_builds)
+            # Add test config if not seen
+            config_name = test['pinning'][0]
+            if config_name not in seen_configs:
+                # Find the original test_matrix entry to preserve all details
+                original_matrix = self.config.get('test_matrix', [])
+                matching_config = next((cfg for cfg in original_matrix if cfg['name'] == config_name), None)
+                
+                if matching_config:
+                    promote_config['test_matrix'].append(matching_config)
+                    seen_configs.add(config_name)
         
         with open(promote_path, 'w') as f:
             yaml.dump(promote_config, f, default_flow_style=False, sort_keys=False)
