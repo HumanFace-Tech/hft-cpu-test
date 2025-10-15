@@ -93,13 +93,36 @@ if [ -f /proc/cpuinfo ]; then
     echo "  Total physical cores: $((phys * cores))"
 fi
 
-# NUMA
+# NUMA and Physical Core Detection
 echo ""
-echo "NUMA:"
+echo "NUMA Topology:"
 if command -v numactl &> /dev/null; then
     nodes=$(numactl --hardware | grep "available:" | cut -d':' -f2 | xargs)
     echo "  $nodes"
-    numactl --hardware | grep "node.*cpus:" | sed 's/^/  /'
+    echo ""
+    echo "  Physical cores (use these for --physcpubind):"
+    
+    # Parse lscpu to show physical cores only
+    if command -v lscpu &> /dev/null; then
+        physical_cores=$(lscpu --parse=CPU,Core | grep -v '^#' | awk -F',' '!seen[$2]++ {print $1}' | tr '\n' ',' | sed 's/,$//')
+        echo "    CPUs: $physical_cores"
+        
+        # Show per-node breakdown
+        echo ""
+        echo "  Per-node breakdown:"
+        for node in $(seq 0 $((${nodes%% *} - 1))); do
+            node_physical=$(lscpu --parse=CPU,Core,Node | grep -v '^#' | awk -F',' -v node=$node '$3==node && !seen[$2]++ {print $1}' | tr '\n' ',' | sed 's/,$//')
+            echo "    Node $node physical cores: $node_physical"
+        done
+        
+        echo ""
+        echo "  SMT/HT siblings (avoid these):"
+        smt_cores=$(lscpu --parse=CPU,Core | grep -v '^#' | awk -F',' 'seen[$2]++ {print $1}' | tr '\n' ',' | sed 's/,$//')
+        echo "    CPUs: $smt_cores"
+    else
+        # Fallback to numactl output
+        numactl --hardware | grep "node.*cpus:" | sed 's/^/  /'
+    fi
 fi
 
 # Governor
