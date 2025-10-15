@@ -312,6 +312,19 @@ class BenchmarkOrchestrator:
         all_builds = self.config['builds']
         selected = self.config.get('builds_select', [])
         
+        # Handle dict format (key: {binary: ..., label: ...})
+        if isinstance(all_builds, dict):
+            builds_list = [
+                {'name': name, **details} 
+                for name, details in all_builds.items()
+            ]
+            
+            if selected == 'all' or selected == ['all']:
+                return builds_list
+            
+            return [b for b in builds_list if b['name'] in selected]
+        
+        # Handle list format ([{name: ..., binary: ..., label: ...}])
         if selected == 'all' or selected == ['all']:
             return all_builds
         
