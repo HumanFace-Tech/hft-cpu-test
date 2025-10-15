@@ -433,8 +433,20 @@ class BenchmarkOrchestrator:
                     'provenance': provenance,
                     'runs': run_results
                 })
+                
+                # Save incrementally after each test
+                self._save_incremental_results()
         
         print(f"\n✅ Completed {len(self.results)}/{total_tests} test cases")
+    
+    def _save_incremental_results(self):
+        """Save current results to disk after each test completes."""
+        raw_json = self.report_dir / 'raw' / 'results.json'
+        with open(raw_json, 'w') as f:
+            json.dump(self.results, f, indent=2)
+        
+        # Also regenerate summary markdown incrementally
+        self.generate_summary_markdown()
     
     def generate_reports(self):
         """Generate summary reports and promote file."""
