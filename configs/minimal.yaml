@@ -1,75 +1,37 @@
-# Minimal working config - copy and customize this!
-# Only the essentials to get started quickly
+# ============================================================================
+# Minimal Quick-Start Configuration
+# ============================================================================
+# Copy this to test.yaml and customize the 3 sections below
+# ============================================================================
 
 mode: exploratory
+repetitions: 2
 
-model:
-  path: /path/to/your/model.gguf  # CHANGE THIS
-  name: MyModel-Q4_K_M
+# 1. SET YOUR MODEL PATH
+model_path: /path/to/your/model.gguf
+model_info: "MyModel-Q4_K_M"
 
-# List your builds here
+# 2. SET YOUR BUILD PATH
 builds:
-  - name: my-build
-    path: /path/to/llama-bench  # CHANGE THIS
-    provider: OpenBLAS  # or BLIS-OpenMP, MKL, none
-    env:
-      OMP_NUM_THREADS: "1"
-      OPENBLAS_NUM_THREADS: "1"
+  my_build:
+    binary: /path/to/llama-bench
+    label: "My Build"
 
-# Which builds to test (use the name from above)
 builds_select:
-  - my-build
+  - my_build
 
-# NUMA pinning strategies
-pinning:
-  presets:
-    vanilla:
-      description: "No pinning"
-      numactl: null
-      llama_numa: null
-    
-    pinned:
-      description: "Pin to 16 cores"
-      # CHANGE THIS: use 'lscpu' and 'numactl -H' to find your core IDs
-      numactl: "-N 0 -m 0 --physcpubind=0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30"
-      llama_numa: null
-  
-  select:
-    - vanilla
-    - pinned
+# 3. SET YOUR CPU CORES (use: lscpu --parse=CPU,Core,Node)
+test_matrix:
+  - name: "test_run"
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7"  # CHANGE: your physical cores
+    env:
+      OMP_NUM_THREADS: "8"  # CHANGE: match your core count
+    extra_args: "-t 8"  # CHANGE: match your core count
 
-# What to test
-scenarios:
-  threads: 16  # CHANGE THIS to your desired thread count
-  
-  batches:
-    - b: 256
-      ub: 64
-  
-  kv_cache:
-    - type_k: f16
-      type_v: f16
-  
-  attention:
-    - flags: ["-fa"]
-      label: "fa-only"
-
-# What to measure
+# Standard metrics
 metrics:
-  - name: pp512
-    args: "-p 512 -n 0"
-  
-  - name: tg128
-    args: "-p 0 -n 128"
+  - pp512
+  - tg128
 
-# How many times to run each test
-repetitions:
-  count: 2
-  outlier_rejection: false
-
-# Where to save results
-output:
-  report_dir: reports
-  timestamp: true
-  generate_promote: true
-  top_n: 2
+# Output
+output_dir: ./reports

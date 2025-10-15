@@ -26,53 +26,39 @@ nano configs/mytest.yaml
 ./run_bench.sh configs/mytest.yaml --dry-run
 ```
 
+builds:
+builds_select: [openblas-build]
+pinning:
+
 ## 2. Quick Single Build Test
 
 Create `configs/single-build-test.yaml`:
 
 ```yaml
 mode: exploratory
-model:
-  path: /data/models/qwen-q4.gguf
-  name: qwen-q4
-
+model_path: /data/models/qwen-q4.gguf
+model_info: qwen-q4
 builds:
-  - name: openblas-build
-    path: /opt/llama.cpp/build/bin/llama-bench
-    provider: OpenBLAS
+  openblas-build:
+    binary: /opt/llama.cpp/build/bin/llama-bench
+    label: OpenBLAS
     env:
       OPENBLAS_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
 
-builds_select: [openblas-build]
-
-pinning:
-  presets:
-    vanilla:
-      description: "No pinning (baseline)"
-      numactl: null
-      llama_numa: null
-  select: [vanilla]
-
-scenarios:
-  threads: 16  # All 16 physical cores
-  batches: [{b: 256, ub: 64}]
-  kv_cache: [{type_k: f16, type_v: f16}]
-  attention: [{flags: ["-fa"], label: "fa"}]
-
+  - openblas-build
+test_matrix:
+  - name: all_cores
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
 metrics:
-  - {name: pp512, args: "-p 512 -n 0"}
-  - {name: tg128, args: "-p 0 -n 128"}
-
-repetitions:
-  count: 2
-  outlier_rejection: false
-
-output:
-  report_dir: reports
-  timestamp: true
-  generate_promote: false
-  top_n: 1
+  - pp512
+  - tg128
+  - mixed
+output_dir: ./reports
+repetitions: 2
 ```
 
 Run it:
@@ -80,37 +66,47 @@ Run it:
 ```bash
 ./run_bench.sh configs/single-build-test.yaml
 ```
+pinning:
 
 ## 3. Compare NUMA Pinning Strategies
 
 Test vanilla vs pinned performance (example for 16-core system):
 
 ```yaml
-# Same as example 2, but update pinning section:
-
-pinning:
-  presets:
-    vanilla:
-      description: "No pinning (baseline)"
-      numactl: null
-      llama_numa: null
-    
-    all-cores:
-      description: "All physical cores (both NUMA nodes)"
-      # IMPORTANT: Replace with YOUR physical core IDs from lscpu
-      numactl: "-N 0,1 -m 0,1 --physcpubind=<your_physical_cores>"
-      llama_numa: null
-    
-    single-node:
-      description: "Single NUMA node only"
-      # IMPORTANT: Replace with YOUR node 0 physical cores
-      numactl: "-N 0 -m 0 --physcpubind=<your_node0_cores>"
-      llama_numa: null
-  
-  select:
-    - vanilla
-    - all-cores
-    - single-node
+mode: exploratory
+model_path: /data/models/qwen-q4.gguf
+model_info: qwen-q4
+builds:
+  openblas-build:
+    binary: /opt/llama.cpp/build/bin/llama-bench
+    label: OpenBLAS
+    env:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+builds_select:
+  - openblas-build
+test_matrix:
+  - name: vanilla
+    numactl: null
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+  - name: all_cores
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+  - name: single_node
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7"
+    env:
+      OMP_NUM_THREADS: "8"
+    extra_args: "-t 8"
+metrics:
+  - pp512
+  - tg128
+  - mixed
+output_dir: ./reports
+repetitions: 2
 ```
 
 **Note:** Use `lscpu --parse=CPU,Core,Node` to find your physical core IDs first!

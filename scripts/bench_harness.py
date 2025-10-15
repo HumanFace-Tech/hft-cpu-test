@@ -143,30 +143,12 @@ class BenchmarkRunner:
         binary: str,
         model: str,
         metric_args: str,
-        scenario: Dict[str, Any],
         pinning: Dict[str, Any]
     ) -> Tuple[List[str], Dict[str, str]]:
-        """Construct the full benchmark command and environment."""
+        """Construct the benchmark command."""
         
         # Base command with metric args
         cmd_parts = [binary, '-m', model] + metric_args.split()
-        
-        # Thread count
-        cmd_parts.extend(['-t', str(scenario['threads'])])
-        
-        # Batch settings
-        if 'batch' in scenario:
-            cmd_parts.extend(['-b', str(scenario['batch']['b'])])
-            cmd_parts.extend(['-ub', str(scenario['batch']['ub'])])
-        
-        # KV cache types
-        if 'kv' in scenario:
-            cmd_parts.extend(['--cache-type-k', scenario['kv']['type_k']])
-            cmd_parts.extend(['--cache-type-v', scenario['kv']['type_v']])
-        
-        # Attention flags
-        if 'attention' in scenario:
-            cmd_parts.extend(scenario['attention']['flags'])
         
         # NUMA handling
         env = os.environ.copy()
@@ -183,19 +165,33 @@ class BenchmarkRunner:
         self,
         build: Dict[str, Any],
         pinning: Dict[str, Any],
-        scenario: Dict[str, Any],
         metric: Dict[str, str],
-        rep: int
+        rep: int,
+        extra_env: Optional[Dict[str, str]] = None,
+        extra_args: str = ''
     ) -> Optional[Dict[str, Any]]:
         """Execute a single benchmark iteration."""
         
+        # Get model path - handle both 'model.path' and 'model_path'
+        if 'model' in self.config and isinstance(self.config['model'], dict):
+            model_path = self.config['model']['path']
+        else:
+            model_path = self.config.get('model_path', '')
+        
         cmd, env = self.build_command(
-            build['path'],
-            self.config['model']['path'],
+            build.get('binary') or build.get('path', ''),
+            model_path,
             metric['args'],
-            scenario,
             pinning
         )
+        
+        # Add extra args if provided (e.g., -t 16)
+        if extra_args:
+            cmd.extend(extra_args.split())
+        
+        # Apply test-specific env vars (e.g., OMP_NUM_THREADS)
+        if extra_env:
+            env.update(extra_env)
         
         # Apply build-specific env overrides
         if 'env' in build:
@@ -330,42 +326,48 @@ class BenchmarkOrchestrator:
         
         return [b for b in all_builds if b['name'] in selected]
     
-    def get_selected_pinning(self) -> List[Tuple[str, Dict[str, Any]]]:
-        """Get selected pinning presets."""
-        presets = self.config['pinning']['presets']
-        selected = self.config['pinning']['select']
-        
-        return [(name, presets[name]) for name in selected if name in presets]
-    
     def generate_test_matrix(self) -> List[Dict[str, Any]]:
-        """Create the full test matrix based on config."""
+        """Create the full test matrix from test_matrix config section."""
         matrix = []
-        
         builds = self.get_selected_builds()
-        pinning_modes = self.get_selected_pinning()
-        scenarios = self.config['scenarios']
-        metrics = self.config['metrics']
+        
+        if 'test_matrix' not in self.config:
+            raise ValueError("Config must have 'test_matrix' section")
+        
+        test_configs = self.config['test_matrix']
+        metrics = self.config.get('metrics', ['pp512', 'tg128', 'mixed'])
+        
+        # Parse metrics into dict format if they're strings
+        parsed_metrics = []
+        for m in metrics:
+            if isinstance(m, str):
+                # Convert "pp512" to proper metric dict
+                if m == 'pp512':
+                    parsed_metrics.append({'name': 'pp512', 'args': '-p 512 -n 0'})
+                elif m == 'tg128':
+                    parsed_metrics.append({'name': 'tg128', 'args': '-p 0 -n 128'})
+                elif m == 'mixed':
+                    parsed_metrics.append({'name': 'mixed', 'args': '-p 512 -n 128'})
+            else:
+                parsed_metrics.append(m)
         
         for build in builds:
-            for pin_name, pin_config in pinning_modes:
-                for batch in scenarios.get('batches', [{}]):
-                    for kv in scenarios.get('kv_cache', [{}]):
-                        for attn in scenarios.get('attention', [{}]):
-                            scenario = {
-                                'threads': scenarios['threads'],
-                                'batch': batch if batch else None,
-                                'kv': kv if kv else None,
-                                'attention': attn if attn else None
-                            }
-                            
-                            for metric in metrics:
-                                test_case = {
-                                    'build': build,
-                                    'pinning': (pin_name, pin_config),
-                                    'scenario': scenario,
-                                    'metric': metric
-                                }
-                                matrix.append(test_case)
+            for test_config in test_configs:
+                # Convert test_config to pinning format
+                pinning = {
+                    'numactl': test_config.get('numactl'),
+                    'llama_numa': test_config.get('llama_numa')
+                }
+                
+                for metric in parsed_metrics:
+                    test_case = {
+                        'build': build,
+                        'pinning': (test_config['name'], pinning),
+                        'metric': metric,
+                        'env': test_config.get('env', {}),
+                        'extra_args': test_config.get('extra_args', '')
+                    }
+                    matrix.append(test_case)
         
         return matrix
     
@@ -375,7 +377,12 @@ class BenchmarkOrchestrator:
         
         matrix = self.generate_test_matrix()
         total_tests = len(matrix)
-        reps = self.config['repetitions']['count']
+        
+        # Handle both 'repetitions' as int or dict
+        if isinstance(self.config.get('repetitions'), int):
+            reps = self.config['repetitions']
+        else:
+            reps = self.config.get('repetitions', {}).get('count', 3)
         
         print(f"📋 Test matrix: {total_tests} unique configs × {reps} reps = {total_tests * reps} runs\n")
         
@@ -386,8 +393,8 @@ class BenchmarkOrchestrator:
             
             # Collect provenance once per build/pinning combo
             provenance = ProvenanceCollector.collect_all(
-                test['build']['path'],
-                test['build'].get('env', {})
+                test['build']['binary'],
+                test.get('env', {})
             )
             
             # Run repetitions
@@ -396,9 +403,10 @@ class BenchmarkOrchestrator:
                 result = runner.run_single(
                     test['build'],
                     test['pinning'][1],
-                    test['scenario'],
                     test['metric'],
-                    rep
+                    rep,
+                    extra_env=test.get('env', {}),
+                    extra_args=test.get('extra_args', '')
                 )
                 if result:
                     run_results.append(result)
@@ -425,7 +433,12 @@ class BenchmarkOrchestrator:
         self.generate_summary_markdown()
         
         # Generate promote file if exploratory
-        if self.mode == 'exploratory' and self.config['output'].get('generate_promote', True):
+        # Handle both 'output' dict and simple top-level configs
+        generate_promote = True
+        if 'output' in self.config and isinstance(self.config['output'], dict):
+            generate_promote = self.config['output'].get('generate_promote', True)
+        
+        if self.mode == 'exploratory' and generate_promote:
             self.generate_promote_config()
         
         print(f"✓ Reports in: {self.report_dir}")

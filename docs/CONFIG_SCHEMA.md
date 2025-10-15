@@ -17,104 +17,93 @@ Complete reference for benchmark YAML configuration files.
   - `path` (string): Absolute path to GGUF model
   - `name` (string): Display name for reports
 
+
 ### `builds` (required)
-- Type: `list`
-- Items: Build definition objects
+- Type: `dict`
+- Keys: unique build names
+- Values: Build definition objects
 
 #### Build Definition
 ```yaml
-- name: unique-build-id
-  path: /absolute/path/to/llama-bench
-  provider: BLIS-OpenMP | OpenBLAS | MKL | none
-  env:
-    OMP_NUM_THREADS: "1"
-    OPENBLAS_NUM_THREADS: "1"
-    # Any env vars needed for this build
+builds:
+  my-build:
+    binary: /absolute/path/to/llama-bench
+    label: OpenBLAS
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      # Any env vars needed for this build
 ```
+
 
 ### `builds_select` (required)
 - Type: `list[string]` or `"all"`
 - Purpose: Which builds to actually run
-- Example: `[blis-omp-znver1, openblas-znver1]`
+- Example: `[my-build, openblas-build]`
 
-### `pinning` (required)
-- Type: `object`
-- Fields:
-  - `presets`: Dict of named pinning strategies
-  - `select`: List of preset names to run
 
-#### Pinning Preset
+### `test_matrix` (required)
+- Type: `list`
+- Items: Test configuration objects
 
+#### Test Matrix Entry
 ```yaml
-preset-name:
-  description: Human-readable explanation
-  numactl: "numactl args" or null
-  llama_numa: "numactl" or null  # Enables --numa flag
+test_matrix:
+  - name: all_cores
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+    env:
+      OMP_NUM_THREADS: "16"
+    extra_args: "-t 16"
+  - name: single_node
+    numactl: "--physcpubind=0,1,2,3,4,5,6,7"
+    env:
+      OMP_NUM_THREADS: "8"
+    extra_args: "-t 8"
 ```
-
-**Important:** Use EITHER `numactl` (process-level) OR `llama_numa` (app-level), not both.
 
 **CPU Topology Note:** Use `lscpu --parse=CPU,Core,Node` to identify your physical core IDs. Specify only physical cores in `--physcpubind`, not SMT/HT siblings.
 
-### `scenarios` (required)
-- Type: `object`
-- Fields:
-  - `threads` (int): Fixed thread count
-  - `batches` (list): Batch/ubatch combinations
-  - `kv_cache` (list): KV cache type combinations
-  - `attention` (list): Attention flag variants
-
-#### Batch Definition
-```yaml
-- b: 256    # Batch size
-  ub: 64    # Ubatch size
-```
-
-#### KV Cache Definition
-```yaml
-- type_k: f16 | q8_0 | q4_0
-  type_v: f16 | q8_0
-```
-
-#### Attention Definition
-```yaml
-- flags: ["-mla", "2", "-fa", "-fmoe"]
-  label: mla2-fa-fmoe  # For reports
-```
 
 ### `metrics` (required)
-- Type: `list`
-- Items: Metric definition objects
+- Type: `list[string]` or `list[dict]`
+- Items: Metric names or metric definition objects
 
 #### Metric Definition
 ```yaml
-- name: pp512           # Display name
-  args: "-p 512 -n 0"   # llama-bench args
+metrics:
+  - pp512
+  - tg128
+  - mixed
+# or
+metrics:
+  - name: pp512
+    args: "-p 512 -n 0"
+  - name: tg128
+    args: "-p 0 -n 128"
+  - name: mixed
+    args: "-p 512 -n 128"
 ```
 
 Common metrics:
 - `pp512`: Prompt processing (512 tokens)
 - `tg128`: Text generation (128 tokens)
-- `mixed`: Combined (`-p 256 -n 512`)
+- `mixed`: Combined (`-p 512 -n 128`)
+
 
 ### `repetitions` (required)
-- Type: `object`
-- Fields:
-  - `count` (int): Number of repetitions per test
-  - `outlier_rejection` (bool): Drop min/max (deep mode)
-  - `confidence_interval` (float, optional): For CI calculation
+- Type: `int` or `object`
+- If `int`: Number of repetitions per test
+- If `object`: Use `count` (int), `outlier_rejection` (bool), `confidence_interval` (float, optional)
 
 **Recommended:**
-- Exploratory: `count: 2`, `outlier_rejection: false`
-- Deep: `count: 10`, `outlier_rejection: true`
+- Exploratory: `2`
+- Deep: `10`
 
-### `output` (required)
-- Type: `object`
-- Fields:
-  - `report_dir` (string): Base directory for reports
-  - `timestamp` (bool): Create timestamped subdirs
-  - `generate_promote` (bool): Create promote.yaml
-  - `top_n` (int): How many to promote per metric
+
+### `output_dir` (required)
+- Type: `string`
+- Purpose: Base directory for reports
+
 
 ## Complete Examples
 

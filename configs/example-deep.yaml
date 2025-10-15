@@ -1,64 +1,39 @@
-# Deep (confirmatory) benchmark configuration
-# Typically generated from exploratory's promote.yaml, but can be hand-crafted
+# ============================================================================
+# Generic Deep Validation Configuration Template
+# ============================================================================
+# Use this AFTER running exploratory mode to validate your winners
+# Copy the winning configuration from your exploratory results
+# ============================================================================
 
 mode: deep
+repetitions: 10
 
-model:
-  path: /path/to/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
-  name: Qwen2.5-14B-Q4_K_M
+model_path: /path/to/your/model.gguf
+model_info: "model-name-Q4_K_M"
 
-# Deep mode: narrow selection of winners
+# Deep mode: only test the winning build
 builds:
-  - name: blis-omp-znver1
-    path: /path/to/builds/blis-omp/bin/llama-bench
-    provider: BLIS-OpenMP
-    env:
-      OMP_NUM_THREADS: "1"
-      BLIS_NUM_THREADS: "1"
+  winning_build:
+    binary: /path/to/winning/llama-bench
+    label: "Winner from exploratory"
 
 builds_select:
-  - blis-omp-znver1
+  - winning_build
 
-# NUMA pinning (best from exploratory)
-pinning:
-  presets:
-    node0:
-      description: "Single NUMA node 0, 16 physical cores"
-      numactl: "-N 0 -m 0 --physcpubind=0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30"
-      llama_numa: null
+# Test matrix - use ONLY the winning config from exploratory
+test_matrix:
+  # Example: If "all_cores" won in exploratory, validate it here
+  - name: "winner_config"
+    numactl: "--physcpubind=<winning_cores>"  # Copy from exploratory winner
+    env:
+      OMP_NUM_THREADS: "<thread_count>"
+    extra_args: "-t <thread_count>"
 
-  select:
-    - node0  # Best preset from exploratory
-
-scenarios:
-  threads: 16
-  
-  batches:
-    - b: 256
-      ub: 96  # Best from exploratory
-  
-  kv_cache:
-    - type_k: q8_0
-      type_v: f16  # Best from exploratory
-  
-  attention:
-    - flags: ["-mla", "3", "-fa"]
-      label: "mla3-fa"  # Best from exploratory
-
+# Same metrics as exploratory
 metrics:
-  - name: pp512
-    args: "-p 512 -n 0"
-  - name: tg128
-    args: "-p 0 -n 128"
-  - name: mixed
-    args: "-p 256 -n 512"
+  - pp512
+  - tg128
+  - mixed
 
-repetitions:
-  count: 10
-  outlier_rejection: true  # Drop min/max
-  confidence_interval: 0.95
-
-output:
-  report_dir: reports
-  timestamp: true
-  generate_promote: false  # Deep is the end of the line
+# Output directory
+output_dir: ./reports
