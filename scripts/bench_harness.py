@@ -251,26 +251,45 @@ class BenchmarkRunner:
     def parse_bench_output(output: str) -> Optional[Dict[str, float]]:
         """Extract performance metrics from llama-bench JSON output.
         
-        Handles IK llama.cpp fork's banner pollution by stripping everything
-        before the first '[' character (the JSON array start).
+        Handles IK llama.cpp fork's banner pollution which appears as:
+        [
+        ======================================= HAVE_FANCY_SIMD is NOT defined
+          {
+            ...
+          }
+        ]
         """
         try:
-            # Clean output: strip everything before first '[' 
-            # This handles banners like "HAVE_FANCY_SIMD is NOT defined" from IK fork
-            json_start = output.find('[')
-            if json_start != -1:
-                output = output[json_start:]
-            elif output.find('{') != -1:
-                # Fallback: try to find standalone JSON object
-                json_start = output.find('{')
-                output = output[json_start:]
+            # IK fork prints banner BETWEEN '[' and '{', so we need to clean it out
+            # Strategy: Find '[', then find first '{', then reconstruct as '[ {' + rest
             
-            # llama-bench with -o json outputs JSON array
+            bracket_start = output.find('[')
+            if bracket_start == -1:
+                # Try standalone object
+                brace_start = output.find('{')
+                if brace_start != -1:
+                    output = output[brace_start:]
+                else:
+                    return None
+            else:
+                # Found '[', now find the first '{'
+                brace_start = output.find('{', bracket_start)
+                if brace_start == -1:
+                    return None
+                
+                # Find the matching ']' at the end
+                bracket_end = output.rfind(']')
+                if bracket_end == -1:
+                    return None
+                
+                # Reconstruct clean JSON: [ + content from { to ] (inclusive)
+                output = '[' + output[brace_start:bracket_end+1]
+            
+            # Parse the cleaned JSON
             data = json.loads(output)
             
             # Could be a single result or array of results
             if isinstance(data, list):
-                # Take first result if multiple
                 result = data[0] if data else {}
             else:
                 result = data
