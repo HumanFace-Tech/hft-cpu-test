@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+"""
+HFT CPU Benchmarking Harness
+
+Orchestrates llama.cpp benchmarks with:
+- YAML-driven configuration
+- Exploratory → Deep workflow
+- Full provenance capture
+- NUMA/threading control
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
+from tabulate import tabulate
+
+
+class ProvenanceCollector:
+    """Captures system state and binary fingerprints."""
+    
+    @staticmethod
+    def binary_sha256(path: str) -> str:
+        """Compute SHA256 of binary."""
+        sha256 = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+    
+    @staticmethod
+    def linked_blas(path: str) -> List[str]:
+        """Extract BLAS/threading libraries from ldd output."""
+        try:
+            result = subprocess.run(
+                ['ldd', path],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            libs = []
+            patterns = ['blis', 'openblas', 'mkl', 'gomp', 'iomp']
+            for line in result.stdout.splitlines():
+                if any(p in line.lower() for p in patterns):
+                    libs.append(line.strip())
+            return libs
+        except Exception as e:
+            return [f"Error getting ldd: {e}"]
+    
+    @staticmethod
+    def numa_status() -> Dict[str, Any]:
+        """Capture NUMA configuration."""
+        try:
+            result = subprocess.run(
+                ['numactl', '--show'],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return {
+                'available': True,
+                'config': result.stdout.strip()
+            }
+        except Exception as e:
+            return {
+                'available': False,
+                'error': str(e)
+            }
+    
+    @staticmethod
+    def cpu_info() -> Dict[str, str]:
+        """Extract CPU model and core count."""
+        info = {}
+        try:
+            with open('/proc/cpuinfo', 'r') as f:
+                content = f.read()
+                model_match = re.search(r'model name\s*:\s*(.+)', content)
+                if model_match:
+                    info['model'] = model_match.group(1).strip()
+                
+                # Count physical cores
+                phys_ids = set(re.findall(r'physical id\s*:\s*(\d+)', content))
+                cores_per_pkg = set(re.findall(r'cpu cores\s*:\s*(\d+)', content))
+                if phys_ids and cores_per_pkg:
+                    info['physical_cores'] = len(phys_ids) * int(list(cores_per_pkg)[0])
+        except Exception as e:
+            info['error'] = str(e)
+        return info
+    
+    @staticmethod
+    def kernel_settings() -> Dict[str, str]:
+        """Check relevant kernel tunables."""
+        settings = {}
+        paths = {
+            'numa_balancing': '/proc/sys/kernel/numa_balancing',
+            'cpu_governor': '/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'
+        }
+        for name, path in paths.items():
+            try:
+                with open(path, 'r') as f:
+                    settings[name] = f.read().strip()
+            except Exception:
+                settings[name] = 'N/A'
+        return settings
+    
+    @classmethod
+    def collect_all(cls, binary_path: str, env: Dict[str, str]) -> Dict[str, Any]:
+        """Gather complete provenance snapshot."""
+        return {
+            'timestamp': datetime.now().isoformat(),
+            'binary': {
+                'path': binary_path,
+                'sha256': cls.binary_sha256(binary_path),
+                'linked_libs': cls.linked_blas(binary_path)
+            },
+            'environment': env,
+            'numa': cls.numa_status(),
+            'cpu': cls.cpu_info(),
+            'kernel': cls.kernel_settings()
+        }
+
+
+class BenchmarkRunner:
+    """Executes individual benchmark runs with full control."""
+    
+    def __init__(self, config: Dict[str, Any], report_dir: Path):
+        self.config = config
+        self.report_dir = report_dir
+        self.raw_dir = report_dir / 'raw'
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+    
+    def build_command(
+        self,
+        binary: str,
+        model: str,
+        metric_args: str,
+        scenario: Dict[str, Any],
+        pinning: Dict[str, Any]
+    ) -> Tuple[List[str], Dict[str, str]]:
+        """Construct the full benchmark command and environment."""
+        
+        # Base command with metric args
+        cmd_parts = [binary, '-m', model] + metric_args.split()
+        
+        # Thread count
+        cmd_parts.extend(['-t', str(scenario['threads'])])
+        
+        # Batch settings
+        if 'batch' in scenario:
+            cmd_parts.extend(['-b', str(scenario['batch']['b'])])
+            cmd_parts.extend(['-ub', str(scenario['batch']['ub'])])
+        
+        # KV cache types
+        if 'kv' in scenario:
+            cmd_parts.extend(['--cache-type-k', scenario['kv']['type_k']])
+            cmd_parts.extend(['--cache-type-v', scenario['kv']['type_v']])
+        
+        # Attention flags
+        if 'attention' in scenario:
+            cmd_parts.extend(scenario['attention']['flags'])
+        
+        # NUMA handling
+        env = os.environ.copy()
+        if pinning.get('numactl'):
+            # Prepend numactl command
+            cmd_parts = ['numactl'] + pinning['numactl'].split() + cmd_parts
+        elif pinning.get('llama_numa'):
+            # Use llama.cpp's --numa flag
+            cmd_parts.extend(['--numa', pinning['llama_numa']])
+        
+        return cmd_parts, env
+    
+    def run_single(
+        self,
+        build: Dict[str, Any],
+        pinning: Dict[str, Any],
+        scenario: Dict[str, Any],
+        metric: Dict[str, str],
+        rep: int
+    ) -> Optional[Dict[str, Any]]:
+        """Execute a single benchmark iteration."""
+        
+        cmd, env = self.build_command(
+            build['path'],
+            self.config['model']['path'],
+            metric['args'],
+            scenario,
+            pinning
+        )
+        
+        # Apply build-specific env overrides
+        if 'env' in build:
+            env.update(build['env'])
+        
+        print(f"  Rep {rep}: {' '.join(cmd)}")
+        
+        try:
+            start_time = time.time()
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 min timeout
+                env=env
+            )
+            elapsed = time.time() - start_time
+            
+            if result.returncode != 0:
+                print(f"    ❌ Failed (exit {result.returncode})")
+                print(f"    stderr: {result.stderr[:200]}")
+                return None
+            
+            # Parse output (llama-bench produces specific format)
+            perf = self.parse_bench_output(result.stdout)
+            if not perf:
+                print(f"    ⚠️  Could not parse output")
+                return None
+            
+            print(f"    ✓ {perf.get('tokens_per_sec', 'N/A')} t/s")
+            
+            return {
+                'success': True,
+                'elapsed': elapsed,
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'performance': perf
+            }
+            
+        except subprocess.TimeoutExpired:
+            print(f"    ⏱️  Timeout")
+            return None
+        except Exception as e:
+            print(f"    ❌ Exception: {e}")
+            return None
+    
+    @staticmethod
+    def parse_bench_output(output: str) -> Optional[Dict[str, float]]:
+        """Extract performance metrics from llama-bench output."""
+        # llama-bench typically outputs lines like:
+        # | model | ... | t/s | ... |
+        # We'll look for patterns in the output
+        
+        perf = {}
+        for line in output.splitlines():
+            # Look for token/sec patterns
+            if 't/s' in line.lower() or 'tokens' in line.lower():
+                # Try to extract numeric values
+                numbers = re.findall(r'(\d+\.\d+)', line)
+                if numbers:
+                    perf['tokens_per_sec'] = float(numbers[0])
+            
+            # Look for prompt processing
+            if 'pp' in line.lower() and 't/s' in line.lower():
+                numbers = re.findall(r'(\d+\.\d+)', line)
+                if numbers:
+                    perf['pp_tokens_per_sec'] = float(numbers[0])
+            
+            # Look for text generation
+            if 'tg' in line.lower() and 't/s' in line.lower():
+                numbers = re.findall(r'(\d+\.\d+)', line)
+                if numbers:
+                    perf['tg_tokens_per_sec'] = float(numbers[0])
+        
+        return perf if perf else None
+
+
+class BenchmarkOrchestrator:
+    """Main orchestrator for the benchmark suite."""
+    
+    def __init__(self, config_path: Path):
+        self.config_path = config_path
+        with open(config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+        
+        self.mode = self.config['mode']
+        self.results = []
+        
+        # Setup report directory
+        timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
+        report_name = f"{timestamp}-{self.mode}"
+        
+        report_base = Path(self.config['output']['report_dir'])
+        self.report_dir = report_base / report_name
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create symlink to latest
+        latest_link = report_base / 'latest'
+        if latest_link.exists():
+            latest_link.unlink()
+        latest_link.symlink_to(report_name)
+        
+        print(f"📊 Report directory: {self.report_dir}")
+    
+    def get_selected_builds(self) -> List[Dict[str, Any]]:
+        """Filter builds based on selection criteria."""
+        all_builds = self.config['builds']
+        selected = self.config.get('builds_select', [])
+        
+        if selected == 'all' or selected == ['all']:
+            return all_builds
+        
+        return [b for b in all_builds if b['name'] in selected]
+    
+    def get_selected_pinning(self) -> List[Tuple[str, Dict[str, Any]]]:
+        """Get selected pinning presets."""
+        presets = self.config['pinning']['presets']
+        selected = self.config['pinning']['select']
+        
+        return [(name, presets[name]) for name in selected if name in presets]
+    
+    def generate_test_matrix(self) -> List[Dict[str, Any]]:
+        """Create the full test matrix based on config."""
+        matrix = []
+        
+        builds = self.get_selected_builds()
+        pinning_modes = self.get_selected_pinning()
+        scenarios = self.config['scenarios']
+        metrics = self.config['metrics']
+        
+        for build in builds:
+            for pin_name, pin_config in pinning_modes:
+                for batch in scenarios.get('batches', [{}]):
+                    for kv in scenarios.get('kv_cache', [{}]):
+                        for attn in scenarios.get('attention', [{}]):
+                            scenario = {
+                                'threads': scenarios['threads'],
+                                'batch': batch if batch else None,
+                                'kv': kv if kv else None,
+                                'attention': attn if attn else None
+                            }
+                            
+                            for metric in metrics:
+                                test_case = {
+                                    'build': build,
+                                    'pinning': (pin_name, pin_config),
+                                    'scenario': scenario,
+                                    'metric': metric
+                                }
+                                matrix.append(test_case)
+        
+        return matrix
+    
+    def run_all(self):
+        """Execute the full benchmark suite."""
+        print(f"\n🚀 Starting {self.mode.upper()} benchmark run\n")
+        
+        matrix = self.generate_test_matrix()
+        total_tests = len(matrix)
+        reps = self.config['repetitions']['count']
+        
+        print(f"📋 Test matrix: {total_tests} unique configs × {reps} reps = {total_tests * reps} runs\n")
+        
+        runner = BenchmarkRunner(self.config, self.report_dir)
+        
+        for idx, test in enumerate(matrix, 1):
+            print(f"\n[{idx}/{total_tests}] {test['build']['name']} / {test['pinning'][0]} / {test['metric']['name']}")
+            
+            # Collect provenance once per build/pinning combo
+            provenance = ProvenanceCollector.collect_all(
+                test['build']['path'],
+                test['build'].get('env', {})
+            )
+            
+            # Run repetitions
+            run_results = []
+            for rep in range(1, reps + 1):
+                result = runner.run_single(
+                    test['build'],
+                    test['pinning'][1],
+                    test['scenario'],
+                    test['metric'],
+                    rep
+                )
+                if result:
+                    run_results.append(result)
+            
+            if run_results:
+                self.results.append({
+                    'test': test,
+                    'provenance': provenance,
+                    'runs': run_results
+                })
+        
+        print(f"\n✅ Completed {len(self.results)}/{total_tests} test cases")
+    
+    def generate_reports(self):
+        """Generate summary reports and promote file."""
+        print(f"\n📝 Generating reports...")
+        
+        # Save raw results as JSON
+        raw_json = self.report_dir / 'raw' / 'results.json'
+        with open(raw_json, 'w') as f:
+            json.dump(self.results, f, indent=2)
+        
+        # Generate markdown summary
+        self.generate_summary_markdown()
+        
+        # Generate promote file if exploratory
+        if self.mode == 'exploratory' and self.config['output'].get('generate_promote', True):
+            self.generate_promote_config()
+        
+        print(f"✓ Reports in: {self.report_dir}")
+    
+    def generate_summary_markdown(self):
+        """Create human-readable summary."""
+        summary_path = self.report_dir / 'summary.md'
+        
+        with open(summary_path, 'w') as f:
+            f.write(f"# Benchmark Summary - {self.mode.title()}\n\n")
+            f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"**Config:** {self.config_path}\n")
+            f.write(f"**Model:** {self.config['model']['name']}\n\n")
+            
+            # Group results by metric
+            by_metric = {}
+            for result in self.results:
+                metric_name = result['test']['metric']['name']
+                if metric_name not in by_metric:
+                    by_metric[metric_name] = []
+                by_metric[metric_name].append(result)
+            
+            for metric_name, results in by_metric.items():
+                f.write(f"## {metric_name.upper()}\n\n")
+                
+                # Build table
+                rows = []
+                for r in results:
+                    test = r['test']
+                    runs = r['runs']
+                    
+                    if not runs:
+                        continue
+                    
+                    # Calculate stats
+                    perfs = [run['performance'].get('tokens_per_sec', 0) for run in runs]
+                    avg_perf = sum(perfs) / len(perfs) if perfs else 0
+                    
+                    row = [
+                        test['build']['name'],
+                        test['pinning'][0],
+                        f"{test['scenario']['batch']['b']}/{test['scenario']['batch']['ub']}" if test['scenario']['batch'] else "N/A",
+                        f"{test['scenario']['kv']['type_k']}" if test['scenario']['kv'] else "N/A",
+                        test['scenario']['attention']['label'] if test['scenario']['attention'] else "N/A",
+                        f"{avg_perf:.2f}",
+                        len(runs)
+                    ]
+                    rows.append(row)
+                
+                # Sort by performance
+                rows.sort(key=lambda x: float(x[5]), reverse=True)
+                
+                headers = ['Build', 'Pinning', 'Batch', 'KV', 'Attention', 't/s', 'Reps']
+                f.write(tabulate(rows, headers=headers, tablefmt='pipe'))
+                f.write("\n\n")
+            
+            f.write("---\n\n")
+            f.write("*Generated by HFT CPU Benchmarking Harness*\n")
+        
+        print(f"  ✓ {summary_path}")
+    
+    def generate_promote_config(self):
+        """Create promote.yaml with top performers for deep testing."""
+        top_n = self.config['output'].get('top_n', 2)
+        
+        # Find top performers per metric
+        by_metric = {}
+        for result in self.results:
+            metric_name = result['test']['metric']['name']
+            if metric_name not in by_metric:
+                by_metric[metric_name] = []
+            
+            runs = result['runs']
+            if runs:
+                perfs = [run['performance'].get('tokens_per_sec', 0) for run in runs]
+                avg_perf = sum(perfs) / len(perfs) if perfs else 0
+                by_metric[metric_name].append((avg_perf, result))
+        
+        # Get top N per metric
+        winners = []
+        for metric_name, results in by_metric.items():
+            results.sort(reverse=True, key=lambda x: x[0])
+            winners.extend([r[1] for r in results[:top_n]])
+        
+        # Build promote config (simplified deep config)
+        promote_path = self.report_dir / 'promote.yaml'
+        
+        promote_config = {
+            'mode': 'deep',
+            'model': self.config['model'],
+            'builds': [],
+            'pinning': {'presets': {}, 'select': []},
+            'scenarios': {
+                'threads': self.config['scenarios']['threads'],
+                'batches': [],
+                'kv_cache': [],
+                'attention': []
+            },
+            'metrics': self.config['metrics'],
+            'repetitions': {
+                'count': 10,
+                'outlier_rejection': True,
+                'confidence_interval': 0.95
+            },
+            'output': {
+                'report_dir': 'reports',
+                'timestamp': True,
+                'generate_promote': False
+            }
+        }
+        
+        # Collect unique winners
+        seen_builds = set()
+        seen_pinning = set()
+        seen_batches = set()
+        seen_kv = set()
+        seen_attn = set()
+        
+        for winner in winners:
+            test = winner['test']
+            
+            build_name = test['build']['name']
+            if build_name not in seen_builds:
+                promote_config['builds'].append(test['build'])
+                seen_builds.add(build_name)
+            
+            pin_name = test['pinning'][0]
+            if pin_name not in seen_pinning:
+                promote_config['pinning']['presets'][pin_name] = test['pinning'][1]
+                promote_config['pinning']['select'].append(pin_name)
+                seen_pinning.add(pin_name)
+            
+            if test['scenario']['batch']:
+                batch_key = f"{test['scenario']['batch']['b']}-{test['scenario']['batch']['ub']}"
+                if batch_key not in seen_batches:
+                    promote_config['scenarios']['batches'].append(test['scenario']['batch'])
+                    seen_batches.add(batch_key)
+            
+            if test['scenario']['kv']:
+                kv_key = f"{test['scenario']['kv']['type_k']}-{test['scenario']['kv']['type_v']}"
+                if kv_key not in seen_kv:
+                    promote_config['scenarios']['kv_cache'].append(test['scenario']['kv'])
+                    seen_kv.add(kv_key)
+            
+            if test['scenario']['attention']:
+                attn_label = test['scenario']['attention']['label']
+                if attn_label not in seen_attn:
+                    promote_config['scenarios']['attention'].append(test['scenario']['attention'])
+                    seen_attn.add(attn_label)
+        
+        # Add select field separately
+        promote_config['builds_select'] = list(seen_builds)
+        
+        with open(promote_path, 'w') as f:
+            yaml.dump(promote_config, f, default_flow_style=False, sort_keys=False)
+        
+        print(f"  ✓ {promote_path} (top {top_n} per metric)")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='HFT CPU Benchmarking Harness',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        'config',
+        type=Path,
+        help='Path to YAML config file'
+    )
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Show test matrix without running'
+    )
+    
+    args = parser.parse_args()
+    
+    if not args.config.exists():
+        print(f"❌ Config file not found: {args.config}")
+        sys.exit(1)
+    
+    orchestrator = BenchmarkOrchestrator(args.config)
+    
+    if args.dry_run:
+        matrix = orchestrator.generate_test_matrix()
+        print(f"\n📋 Test Matrix ({len(matrix)} configs):\n")
+        for idx, test in enumerate(matrix, 1):
+            print(f"{idx}. {test['build']['name']} / {test['pinning'][0]} / {test['metric']['name']}")
+        sys.exit(0)
+    
+    orchestrator.run_all()
+    orchestrator.generate_reports()
+    
+    print(f"\n🎉 All done! Check {orchestrator.report_dir}/summary.md")
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,64 @@
+# Deep (confirmatory) benchmark configuration
+# Typically generated from exploratory's promote.yaml, but can be hand-crafted
+
+mode: deep
+
+model:
+  path: /path/to/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+  name: Qwen2.5-14B-Q4_K_M
+
+# Deep mode: narrow selection of winners
+builds:
+  - name: blis-omp-znver1
+    path: /path/to/builds/blis-omp/bin/llama-bench
+    provider: BLIS-OpenMP
+    env:
+      OMP_NUM_THREADS: "1"
+      BLIS_NUM_THREADS: "1"
+
+builds_select:
+  - blis-omp-znver1
+
+# NUMA pinning (best from exploratory)
+pinning:
+  presets:
+    node0:
+      description: "Single NUMA node 0, 16 physical cores"
+      numactl: "-N 0 -m 0 --physcpubind=0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30"
+      llama_numa: null
+
+  select:
+    - node0  # Best preset from exploratory
+
+scenarios:
+  threads: 16
+  
+  batches:
+    - b: 256
+      ub: 96  # Best from exploratory
+  
+  kv_cache:
+    - type_k: q8_0
+      type_v: f16  # Best from exploratory
+  
+  attention:
+    - flags: ["-mla", "3", "-fa"]
+      label: "mla3-fa"  # Best from exploratory
+
+metrics:
+  - name: pp512
+    args: "-p 512 -n 0"
+  - name: tg128
+    args: "-p 0 -n 128"
+  - name: mixed
+    args: "-p 256 -n 512"
+
+repetitions:
+  count: 10
+  outlier_rejection: true  # Drop min/max
+  confidence_interval: 0.95
+
+output:
+  report_dir: reports
+  timestamp: true
+  generate_promote: false  # Deep is the end of the line

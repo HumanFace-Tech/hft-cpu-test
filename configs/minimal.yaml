@@ -1,0 +1,75 @@
+# Minimal working config - copy and customize this!
+# Only the essentials to get started quickly
+
+mode: exploratory
+
+model:
+  path: /path/to/your/model.gguf  # CHANGE THIS
+  name: MyModel-Q4_K_M
+
+# List your builds here
+builds:
+  - name: my-build
+    path: /path/to/llama-bench  # CHANGE THIS
+    provider: OpenBLAS  # or BLIS-OpenMP, MKL, none
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+
+# Which builds to test (use the name from above)
+builds_select:
+  - my-build
+
+# NUMA pinning strategies
+pinning:
+  presets:
+    vanilla:
+      description: "No pinning"
+      numactl: null
+      llama_numa: null
+    
+    pinned:
+      description: "Pin to 16 cores"
+      # CHANGE THIS: use 'lscpu' and 'numactl -H' to find your core IDs
+      numactl: "-N 0 -m 0 --physcpubind=0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30"
+      llama_numa: null
+  
+  select:
+    - vanilla
+    - pinned
+
+# What to test
+scenarios:
+  threads: 16  # CHANGE THIS to your desired thread count
+  
+  batches:
+    - b: 256
+      ub: 64
+  
+  kv_cache:
+    - type_k: f16
+      type_v: f16
+  
+  attention:
+    - flags: ["-fa"]
+      label: "fa-only"
+
+# What to measure
+metrics:
+  - name: pp512
+    args: "-p 512 -n 0"
+  
+  - name: tg128
+    args: "-p 0 -n 128"
+
+# How many times to run each test
+repetitions:
+  count: 2
+  outlier_rejection: false
+
+# Where to save results
+output:
+  report_dir: reports
+  timestamp: true
+  generate_promote: true
+  top_n: 2

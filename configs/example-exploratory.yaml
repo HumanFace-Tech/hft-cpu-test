@@ -1,0 +1,119 @@
+# Exploratory benchmark configuration
+# Copy this to mybox-exploratory.yaml and customize
+
+mode: exploratory  # exploratory | deep
+
+# Model to test (single path for reproducibility)
+model:
+  path: /path/to/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+  name: Qwen2.5-14B-Q4_K_M
+
+# Builds to test (list all, select subset for exploratory)
+builds:
+  - name: blis-omp-znver1
+    path: /path/to/builds/blis-omp/bin/llama-bench
+    provider: BLIS-OpenMP
+    env:
+      OMP_NUM_THREADS: "1"
+      BLIS_NUM_THREADS: "1"
+    
+  - name: openblas-znver1
+    path: /path/to/builds/openblas/bin/llama-bench
+    provider: OpenBLAS
+    env:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+    
+  - name: cpu-only-znver1
+    path: /path/to/builds/cpu-only/bin/llama-bench
+    provider: none
+    env:
+      OMP_NUM_THREADS: "1"
+
+# Select which builds to run in exploratory (or "all")
+builds_select:
+  - blis-omp-znver1
+  - openblas-znver1
+  - cpu-only-znver1
+
+# NUMA pinning strategies
+pinning:
+  presets:
+    vanilla:
+      description: "No process pinning, no --numa flag"
+      numactl: null
+      llama_numa: null
+    
+    node0:
+      description: "Single NUMA node 0, 16 physical cores"
+      numactl: "-N 0 -m 0 --physcpubind=0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30"
+      llama_numa: null
+    
+    dual-node:
+      description: "NUMA nodes 0+1, 16 cores spread across both"
+      numactl: "-N 0,1 -m 0,1 --physcpubind=0,2,4,6,8,10,12,14,32,34,36,38,40,42,44,46"
+      llama_numa: null
+    
+    # llama-numa:
+    #   description: "Let llama.cpp handle NUMA (for comparison)"
+    #   numactl: null
+    #   llama_numa: "numactl"  # enables --numa numactl flag
+
+  # Which presets to run in this config
+  select:
+    - vanilla
+    - node0
+    - dual-node
+
+# Core testing scenarios
+scenarios:
+  # Fixed thread count (change this for your system)
+  threads: 16
+  
+  # Batch/ubatch combinations
+  batches:
+    - b: 256
+      ub: 64
+    - b: 256
+      ub: 96
+  
+  # KV cache types
+  kv_cache:
+    - type_k: f16
+      type_v: f16
+    - type_k: q8_0
+      type_v: f16
+  
+  # Attention variants
+  attention:
+    - flags: ["-mla", "2", "-fa", "-fmoe"]
+      label: "mla2-fa-fmoe"
+    - flags: ["-mla", "3", "-fa", "-fmoe"]
+      label: "mla3-fa-fmoe"
+    - flags: ["-mla", "2", "-fa"]
+      label: "mla2-fa"
+    - flags: ["-mla", "3", "-fa"]
+      label: "mla3-fa"
+
+# Metrics to measure
+metrics:
+  - name: pp512
+    args: "-p 512 -n 0"
+    
+  - name: tg128
+    args: "-p 0 -n 128"
+    
+  - name: mixed
+    args: "-p 256 -n 512"
+
+# Repetitions and outlier handling
+repetitions:
+  count: 2  # Low for exploratory
+  outlier_rejection: false  # Only for deep mode
+
+# Output configuration
+output:
+  report_dir: reports
+  timestamp: true  # Creates reports/YYYY-MM-DD-HHMMSS-exploratory/
+  generate_promote: true  # Creates promote.yaml for deep mode
+  top_n: 2  # How many to promote per metric

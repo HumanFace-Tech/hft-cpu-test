@@ -1,0 +1,28 @@
+# Reports and build artifacts
+reports/
+builds/llama.cpp-src/
+builds/*/
+
+# Python
+*.pyc
+__pycache__/
+.venv/
+venv/
+
+# Logs
+*.log
+
+# User-specific configs and notes
+configs/*-test.yaml
+configs/mytest*.yaml
+STATUS.md
+
+# OS
+.DS_Store
+*~
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
