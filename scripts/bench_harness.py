@@ -401,7 +401,8 @@ class BenchmarkOrchestrator:
                 elif m == 'tg128':
                     parsed_metrics.append({'name': 'tg128', 'args': '-p 0 -n 128'})
                 elif m == 'mixed':
-                    parsed_metrics.append({'name': 'mixed', 'args': '-p 512 -n 128'})
+                    # Use -pg for true mixed workload (prompt + generation together)
+                    parsed_metrics.append({'name': 'mixed', 'args': '-pg 512,128'})
             else:
                 parsed_metrics.append(m)
         
