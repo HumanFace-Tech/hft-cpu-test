@@ -1,6 +1,8 @@
 # HFT CPU Benchmarking Kit
 
-A lightweight, config-driven harness for systematic llama.cpp performance testing on multi-core NUMA systems.
+A lightweight, config-driven harness for systematic llama.cpp performance testing on multi-core NUMA systems. 
+
+Fore more details - check-out: [Sergiu's blog article - Testing on AMD Threadripper 1950x](https://nikro.me/articles/professional/cpu-only-llm-inference/)
 
 ## Philosophy
 
